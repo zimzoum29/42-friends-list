@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "42 Intra Friends",
+  "version": "1.0.0",
+  "description": "Ajoute une section Amis sur le profil Intra 42.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://profile.intra.42.fr/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://profile.intra.42.fr/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
