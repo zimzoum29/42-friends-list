@@ -36,6 +36,62 @@ function waitForElement(selector, timeout = 8000) {
   });
 }
 
+// Ajuste la hauteur du panneau Friends pour qu'elle soit identique aux autres,
+// et calcule la hauteur max de la liste pour qu'elle scrolle à l'intérieur.
+function syncFriendsPanelHeight() {
+  const panel = document.getElementById("friends-42-panel");
+  if (!panel) return;
+
+  // On prend la hauteur du premier autre panneau de la grille
+  const firstOtherCard = document.querySelector(".container-inner-item.boxed:not(#friends-42-panel)");
+  if (!firstOtherCard) return;
+
+  const targetHeight = firstOtherCard.offsetHeight;
+  if (!targetHeight) return;
+
+  // On force notre carte à faire la même hauteur
+  panel.style.height = targetHeight + "px";
+
+  const list = panel.querySelector(".friends-42-list");
+  const header = panel.querySelector(".friends-42-card-header");
+  const form = panel.querySelector(".friends-42-form");
+  if (!list) return;
+
+  // On calcule l'espace disponible pour la liste à l'intérieur du panneau
+  const style = window.getComputedStyle(panel);
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+
+  const headerHeight = header ? header.offsetHeight : 0;
+  const formHeight = form ? form.offsetHeight : 0;
+
+  const available =
+    targetHeight - paddingTop - paddingBottom - headerHeight - formHeight - 4; // petite marge
+
+  if (available > 0) {
+    list.style.maxHeight = available + "px";
+  }
+}
+
+
+// Détection du thème (clair / sombre) en fonction de la couleur de fond du body
+function detectTheme() {
+  try {
+    const bodyStyle = window.getComputedStyle(document.body);
+    const bg = bodyStyle.backgroundColor || "rgb(255,255,255)";
+    const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (!match) return "light";
+    const r = parseInt(match[1], 10);
+    const g = parseInt(match[2], 10);
+    const b = parseInt(match[3], 10);
+    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+    return brightness < 128 ? "dark" : "light";
+  } catch (e) {
+    console.warn("[42 Friends] Impossible de détecter le thème :", e);
+    return "light";
+  }
+}
+
 // ---------- Storage helpers ----------
 function loadFriends() {
   return new Promise((resolve) => {
@@ -78,7 +134,7 @@ function applyStatusToBadge(statusText, badgeEl) {
   const isUnavailable =
     !text ||
     lower === "unavailable" ||
-    lower === "unvailable" || // au cas où
+    lower === "unvailable" ||
     lower.includes("unavailable");
 
   if (isUnavailable) {
@@ -107,7 +163,7 @@ function loadProfileInfoViaIframe(login, avatarEl, statusBadgeEl) {
       const doc = iframe.contentDocument || iframe.contentWindow.document;
       if (!doc) {
         console.warn("[42 Friends] Pas de doc dans l'iframe pour", login);
-        avatarEl && (avatarEl.style.display = "none");
+        if (avatarEl) avatarEl.style.display = "none";
         applyStatusToBadge("Unavailable", statusBadgeEl);
         iframe.remove();
         return;
@@ -121,9 +177,7 @@ function loadProfileInfoViaIframe(login, avatarEl, statusBadgeEl) {
       let avatarUrl = null;
       if (avatarDiv) {
         const styleAttr = avatarDiv.getAttribute("style") || "";
-        const match = styleAttr.match(
-          /background-image:\s*url\((['"]?)(.*?)\1\)/
-        );
+        const match = styleAttr.match(/background-image:\s*url\((['"]?)(.*?)\1\)/i);
         if (match && match[2]) {
           avatarUrl = match[2];
         }
@@ -132,6 +186,7 @@ function loadProfileInfoViaIframe(login, avatarEl, statusBadgeEl) {
       if (avatarEl && avatarEl.isConnected) {
         if (avatarUrl) {
           avatarEl.src = avatarUrl;
+          avatarEl.style.display = "";
         } else {
           avatarEl.style.display = "none";
         }
@@ -165,40 +220,41 @@ function loadProfileInfoViaIframe(login, avatarEl, statusBadgeEl) {
   document.body.appendChild(iframe);
 }
 
-// Résout avatar + status pour un login donné (cache + iframe si besoin)
+// Résout avatar + status pour un login donné (cache + iframe à chaque reload)
 async function ensureProfileInfo(login, avatarEl, statusBadgeEl) {
   const lower = login.toLowerCase();
   const cache = await loadProfileInfoCache();
 
   const cached = cache[lower];
   if (cached) {
-    // Avatar
+    // Avatar (pré-affichage avec le cache)
     if (avatarEl && avatarEl.isConnected) {
       if (cached.avatarUrl) {
         avatarEl.src = cached.avatarUrl;
+        avatarEl.style.display = "";
       } else {
         avatarEl.style.display = "none";
       }
     }
     // Status
     applyStatusToBadge(cached.statusText, statusBadgeEl);
-    return;
   }
 
-  // Sinon, on va chercher via iframe
+  // Dans tous les cas, on rafraîchit depuis la page profil
   loadProfileInfoViaIframe(login, avatarEl, statusBadgeEl);
 }
 
 // ---------- Création du panneau Amis ----------
-function createFriendsPanel() {
+function createFriendsPanel(theme) {
   const panel = document.createElement("div");
   panel.id = "friends-42-panel";
   // classes utilisées par les rectangles de l'intra
-  panel.className = "container-inner-item boxed friends-42-card";
+  panel.className = "container-inner-item boxed agenda-container friends-42-card";
+  panel.classList.add(theme === "dark" ? "friends-42-theme-dark" : "friends-42-theme-light");
 
   panel.innerHTML = `
     <header class="friends-42-card-header">
-      <h2 class="profile-title">FRIENDS</h2>
+      <h4 class="profile-title">FRIENDS</h4>
       <p class="friends-42-card-subtitle">Accès rapide aux profils de tes amis</p>
     </header>
 
@@ -215,20 +271,29 @@ function createFriendsPanel() {
     <div id="friends-42-list" class="friends-42-list"></div>
   `;
 
-  // Style pour l'intérieur du bloc Friends
+  // Style pour l'intérieur du bloc Friends (thème clair/sombre via classes)
   const style = document.createElement("style");
   style.textContent = `
+    .friends-42-card {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
     .friends-42-card-header {
       display: flex;
       flex-direction: column;
       gap: 4px;
-      margin-bottom: 10px;
     }
 
     .friends-42-card-subtitle {
       margin: 0;
       font-size: 11px;
       color: #999;
+    }
+
+    .friends-42-theme-dark .friends-42-card-subtitle {
+      color: #ccc;
     }
 
     .friends-42-form {
@@ -250,17 +315,27 @@ function createFriendsPanel() {
       outline: none;
     }
 
+    .friends-42-theme-dark #friends-42-input {
+      background: #242424;
+      border-color: #444;
+      color: #f5f5f5;
+    }
+
     #friends-42-input:focus {
       border-color: #27d1c3;
       box-shadow: 0 0 0 1px rgba(39,209,195,0.4);
       background: #ffffff;
     }
 
+    .friends-42-theme-dark #friends-42-input:focus {
+      background: #181818;
+    }
+
     #friends-42-form button {
       padding: 6px 14px;
       border-radius: 3px;
-      border: 1px solid #00babc;
-      background: #00babc;
+      border: 1px solid #27d1c3;
+      background: #27d1c3;
       color: #fff;
       font-size: 11px;
       font-weight: 600;
@@ -286,10 +361,12 @@ function createFriendsPanel() {
       flex-direction: column;
       gap: 4px;
       margin-top: 6px;
-      max-height: 280px;       /* scroll interne dans le rectangle */
+      flex: 1;
+      min-height: 0;
       overflow-y: auto;
       padding-right: 4px;
     }
+
 
     .friends-42-list::-webkit-scrollbar {
       width: 6px;
@@ -300,8 +377,16 @@ function createFriendsPanel() {
       border-radius: 4px;
     }
 
+    .friends-42-theme-dark .friends-42-list::-webkit-scrollbar-thumb {
+      background: #555555;
+    }
+
     .friends-42-list::-webkit-scrollbar-thumb:hover {
       background: #b8b8b8;
+    }
+
+    .friends-42-theme-dark .friends-42-list::-webkit-scrollbar-thumb:hover {
+      background: #777777;
     }
 
     .friends-42-list::-webkit-scrollbar-track {
@@ -312,10 +397,60 @@ function createFriendsPanel() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: #373c48;
+      background: #fafafa;
       border-radius: 3px;
       padding: 4px 8px;
-      border: 1px solid #00babc;
+      border: 1px solid #eee;
+    }
+
+        .friends-42-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 6px;
+      flex-shrink: 0;
+    }
+
+    .friends-42-arrows {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .friends-42-move {
+      width: 18px;
+      height: 16px;
+      padding: 0;
+      border-radius: 3px;
+      border: 1px solid #ddd;
+      background: #f5f5f5;
+      font-size: 10px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .friends-42-theme-dark .friends-42-move {
+      border-color: #444;
+      background: #303030;
+      color: #f5f5f5;
+    }
+
+    .friends-42-move:hover:not(:disabled) {
+      background: #e3e3e3;
+    }
+
+    .friends-42-theme-dark .friends-42-move:hover:not(:disabled) {
+      background: #3a3a3a;
+    }
+
+    .friends-42-move:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+
+    .friends-42-theme-dark .friends-42-item {
+      background: #202020;
+      border-color: #333;
     }
 
     .friends-42-main {
@@ -333,6 +468,11 @@ function createFriendsPanel() {
       border: 1px solid #ddd;
       flex-shrink: 0;
       background: #e0e0e0;
+    }
+
+    .friends-42-theme-dark .friends-42-avatar {
+      border-color: #444;
+      background: #303030;
     }
 
     .friends-42-status-badge {
@@ -359,15 +499,31 @@ function createFriendsPanel() {
       border: 1px solid #f0a3a3;
     }
 
+    .friends-42-theme-dark .friends-42-status-online {
+      background: #204b33;
+      color: #c4f3d3;
+      border-color: #3c8f5b;
+    }
+
+    .friends-42-theme-dark .friends-42-status-offline {
+      background: #4b2020;
+      color: #f7c1c1;
+      border-color: #a94d4d;
+    }
+
     .friends-42-link {
-      color: #00babc;
+      color: #27d1c3;
       text-decoration: none;
       font-weight: 500;
-      font-size: 16px;
+      font-size: 12px;
       white-space: nowrap;
       text-overflow: ellipsis;
       overflow: hidden;
       max-width: 120px;
+    }
+
+    .friends-42-theme-dark .friends-42-link {
+      color: #46e1d4;
     }
 
     .friends-42-link:hover {
@@ -395,6 +551,10 @@ function createFriendsPanel() {
       color: #aaa;
       font-style: italic;
       padding-top: 2px;
+    }
+
+    .friends-42-theme-dark .friends-42-empty {
+      color: #888;
     }
   `;
   document.head.appendChild(style);
@@ -429,8 +589,29 @@ async function removeFriend(login) {
   await saveFriends(friends);
   renderFriendsList();
 }
+// Déplace un ami de la position fromIndex à toIndex dans la liste
+async function moveFriend(fromIndex, toIndex) {
+  let friends = await loadFriends();
+  if (
+    fromIndex < 0 ||
+    fromIndex >= friends.length ||
+    toIndex < 0 ||
+    toIndex >= friends.length
+  ) {
+    return;
+  }
+
+  const item = friends[fromIndex];
+  friends.splice(fromIndex, 1);
+  friends.splice(toIndex, 0, item);
+
+  await saveFriends(friends);
+  renderFriendsList();
+}
+
 
 // ---------- Rendu de la liste (avatar + bulle de status) ----------
+// ---------- Rendu de la liste (avatar + bulle de status + flèches up/down) ----------
 async function renderFriendsList() {
   const friends = await loadFriends();
   const listContainer = document.querySelector("#friends-42-list");
@@ -443,13 +624,18 @@ async function renderFriendsList() {
     empty.className = "friends-42-empty";
     empty.textContent = "Aucun ami ajouté pour l’instant.";
     listContainer.appendChild(empty);
+    // recalcul hauteur
+    setTimeout(syncFriendsPanelHeight, 0);
     return;
   }
 
-  friends.forEach((login) => {
+  const total = friends.length;
+
+  friends.forEach((login, index) => {
     const item = document.createElement("div");
     item.className = "friends-42-item";
 
+    // Bloc gauche : avatar + status + login
     const main = document.createElement("div");
     main.className = "friends-42-main";
 
@@ -460,7 +646,7 @@ async function renderFriendsList() {
 
     const statusBadge = document.createElement("span");
     statusBadge.className = "friends-42-status-badge";
-    statusBadge.textContent = "…"; // affichage temporaire
+    statusBadge.textContent = "…";
 
     const link = document.createElement("a");
     link.className = "friends-42-link";
@@ -473,6 +659,38 @@ async function renderFriendsList() {
     main.appendChild(statusBadge);
     main.appendChild(link);
 
+    // Bloc droite : flèches + croix
+    const controls = document.createElement("div");
+    controls.className = "friends-42-controls";
+
+    const arrows = document.createElement("div");
+    arrows.className = "friends-42-arrows";
+
+    const upBtn = document.createElement("button");
+    upBtn.className = "friends-42-move";
+    upBtn.textContent = "▲";
+    upBtn.title = "Monter";
+
+    const downBtn = document.createElement("button");
+    downBtn.className = "friends-42-move";
+    downBtn.textContent = "▼";
+    downBtn.title = "Descendre";
+
+    // Désactiver si en haut/en bas
+    if (index === 0) upBtn.disabled = true;
+    if (index === total - 1) downBtn.disabled = true;
+
+    upBtn.addEventListener("click", () => {
+      moveFriend(index, index - 1);
+    });
+
+    downBtn.addEventListener("click", () => {
+      moveFriend(index, index + 1);
+    });
+
+    arrows.appendChild(upBtn);
+    arrows.appendChild(downBtn);
+
     const removeBtn = document.createElement("button");
     removeBtn.className = "friends-42-remove";
     removeBtn.textContent = "✕";
@@ -481,18 +699,25 @@ async function renderFriendsList() {
       removeFriend(login);
     });
 
+    controls.appendChild(arrows);
+    controls.appendChild(removeBtn);
+
     item.appendChild(main);
-    item.appendChild(removeBtn);
+    item.appendChild(controls);
     listContainer.appendChild(item);
 
-    // Chargement asynchrone avatar + status
+    // Chargement asynchrone avatar + status (avec refresh à chaque reload)
     ensureProfileInfo(login, avatar, statusBadge);
 
     avatar.addEventListener("error", () => {
       avatar.style.display = "none";
     });
   });
+
+  // Une fois la liste rendue, on recalcule la hauteur dispo
+  setTimeout(syncFriendsPanelHeight, 0);
 }
+
 
 // ---------- Insertion dans la grille ----------
 async function insertFriendsPanel() {
@@ -512,18 +737,23 @@ async function insertFriendsPanel() {
     return;
   }
 
+  // Détection du thème à partir du body
+  const theme = detectTheme();
+
   // On crée une nouvelle colonne avec les mêmes classes que les autres
   const newCol = document.createElement("div");
   newCol.className = firstCol.className;
 
-  const panel = createFriendsPanel();
+  const panel = createFriendsPanel(theme);
   newCol.appendChild(panel);
 
   // On insère notre colonne AVANT la première colonne existante
   row.insertBefore(newCol, firstCol);
-  console.log("[42 Friends] Colonne Friends insérée dans la grille.");
+  console.log("[42 Friends] Colonne Friends insérée dans la grille avec thème", theme);
 
   renderFriendsList();
+
+  setTimeout(syncFriendsPanelHeight, 0);
 }
 
 // ---------- Init : seulement sur la home ----------
@@ -544,4 +774,10 @@ onDomReady(() => {
   } else {
     insertFriendsPanel();
   }
+  
+});
+
+window.addEventListener("resize", () => {
+  // on recalcule quand la taille de la fenêtre change (zoom inclus)
+  syncFriendsPanelHeight();
 });
